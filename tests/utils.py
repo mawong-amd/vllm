@@ -1475,6 +1475,29 @@ def get_physical_device_indices(devices):
 
 
 @_nvml()
+def record_gpu_memory_stats(
+    *,
+    devices: list[int],
+) -> tuple[dict[int, str], dict[int, tuple[float, float]]]:
+    devices = get_physical_device_indices(devices)
+    output: dict[int, str] = {}
+    output_raw: dict[int, tuple[float, float]] = {}
+    for device in devices:
+        if current_platform.is_rocm():
+            dev_handle = amdsmi_get_processor_handles()[device]
+            mem_info = amdsmi_get_gpu_vram_usage(dev_handle)
+            gb_used = mem_info["vram_used"] / 2**10
+            gb_total = mem_info["vram_total"] / 2**10
+        else:
+            dev_handle = nvmlDeviceGetHandleByIndex(device)
+            mem_info = nvmlDeviceGetMemoryInfo(dev_handle)
+            gb_used = mem_info.used / 2**30
+            gb_total = mem_info.total / 2**30
+        output_raw[device] = (gb_used, gb_total)
+        output[device] = f"{gb_used:.02f}/{gb_total:.02f}"
+    return output, output_raw
+
+
 def wait_for_gpu_memory_to_clear(
     *,
     devices: list[int],
@@ -1500,22 +1523,7 @@ def wait_for_gpu_memory_to_clear(
     devices = get_physical_device_indices(devices)
     start_time = time.time()
     while True:
-        output: dict[int, str] = {}
-        output_raw: dict[int, tuple[float, float]] = {}
-        for device in devices:
-            if current_platform.is_rocm():
-                dev_handle = amdsmi_get_processor_handles()[device]
-                mem_info = amdsmi_get_gpu_vram_usage(dev_handle)
-                gb_used = mem_info["vram_used"] / 2**10
-                gb_total = mem_info["vram_total"] / 2**10
-            else:
-                dev_handle = nvmlDeviceGetHandleByIndex(device)
-                mem_info = nvmlDeviceGetMemoryInfo(dev_handle)
-                gb_used = mem_info.used / 2**30
-                gb_total = mem_info.total / 2**30
-            output_raw[device] = (gb_used, gb_total)
-            output[device] = f"{gb_used:.02f}/{gb_total:.02f}"
-
+        output, output_raw = record_gpu_memory_stats(devices=devices)
         print("gpu memory used/total (GiB): ", end="")
         for k, v in output.items():
             print(f"{k}={v}; ", end="")

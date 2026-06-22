@@ -64,6 +64,7 @@ from vllm.logprobs import Logprob
 from vllm.multimodal.media import MediaWithBytes
 from vllm.multimodal.utils import fetch_image
 from vllm.outputs import RequestOutput
+from vllm.platforms import current_platform
 from vllm.sampling_params import BeamSearchParams
 from vllm.transformers_utils.utils import maybe_model_redirect
 from vllm.utils.collection_utils import is_list_of
@@ -852,6 +853,16 @@ class HfRunner:
         return self.model.predict(prompts, *args, convert_to_tensor=True, **kwargs)
 
     def __enter__(self):
+        if current_platform.is_rocm():
+            from tests.utils import record_gpu_memory_stats
+
+            if (device_count := current_platform.device_count()) > 0:
+                _, mem_usage_stats = record_gpu_memory_stats(
+                    devices=list(range(device_count))
+                )
+                self._max_gpu_mem_util = max(
+                    mem_used / mem_tot for mem_used, mem_tot in mem_usage_stats.values()
+                )
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -861,7 +872,9 @@ class HfRunner:
         cleanup_dist_env_and_memory()
         # ROCm frees VRAM lazily; wait so a runner started right after this HF
         # model exits does not OOM on its startup memory guard.
-        wait_for_rocm_memory_to_settle()
+        wait_for_rocm_memory_to_settle(
+            threshold_ratio=max(0.1, getattr(self, "_max_gpu_mem_util", 0.0))
+        )
 
 
 @pytest.fixture(scope="session")
